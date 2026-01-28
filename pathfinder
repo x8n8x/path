@@ -1,8 +1,10 @@
 --!strict
 --!optimize 2
 
-local radius = 50
+local radius = 100
 local scan_int = 2.0
+local debounce = 0.05
+
 local pink = Color3.fromRGB(255, 105, 180)
 local line = Color3.fromRGB(255, 100, 150)
 local bg = Color3.fromRGB(25, 25, 30)
@@ -13,258 +15,321 @@ local ws = game:GetService("Workspace")
 local rs = game:GetService("RunService")
 local f = DrawingImmediate
 
-local objs = {}
+local cache = {}
+local cache_size = 0
 local last_scan = 0
 local on = true
 local cur = nil
 local cur_dist = radius
 local last_key = 0
+local frame = 0
 
+local function has_pos(obj)
+    if not obj then return false end
+    local ok = pcall(function()
+        return typeof(obj.Position) == "vector"
+    end)
+    return ok
+end
 
-local function get_object_position(obj)
+local function get_pos(obj)
     if not obj then return nil end
     
-
-    local success1, pos1 = pcall(function()
+    local ok, pos = pcall(function()
         return obj.Position
     end)
     
-    if success1 and pos1 then
-        return pos1
+    if ok and typeof(pos) == "vector" then
+        return pos
     end
     
-
-    local success2, cframe = pcall(function()
+    local ok2, cf = pcall(function()
         return obj.CFrame
     end)
     
-    if success2 and cframe and cframe.Position then
-        return cframe.Position
+    if ok2 and cf and cf.Position then
+        return cf.Position
     end
     
     return nil
 end
 
-local function scan()
-    local new = {}
-    local function scan_child(p)
-        for _, c in p:GetChildren() do
-
-            local hasPosition = false
-            local success1, pos1 = pcall(function()
-                return c.Position
-            end)
-            local success2, cframe = pcall(function()
-                return c.CFrame
-            end)
-            
-            if (success1 and pos1) or (success2 and cframe and cframe.Position) then
-                table.insert(new, c)
-            end
-            
-            scan_child(c)
-        end
-    end
-    scan_child(ws)
-    return new
-end
-
-local function path(o)
-    if not o then return "" end
+local function get_path(obj)
+    if not obj then return "" end
+    
     local parts = {}
-    local cur = o
+    local cur = obj
+    
     while cur and cur ~= game do
         table.insert(parts, 1, cur.Name)
         cur = cur.Parent
     end
+    
     return table.concat(parts, " > ")
 end
 
-local function pos(o)
-    return get_object_position(o)
-end
-
-local function col_state(o)
-    if not o then return nil end
+local function get_col(obj)
+    if not obj then return "N/A" end
     
-
-    local success, canCollide = pcall(function()
-        return o.CanCollide
+    local ok, col = pcall(function()
+        return obj.CanCollide
     end)
     
-    if success then
-        return canCollide
+    if ok and typeof(col) == "boolean" then
+        return col and "ON" or "OFF"
     end
     
-    return nil
-end
-
-local function toggle_col(o)
-    if not o then return false end
-    
-
-    local success, current = pcall(function()
-        return o.CanCollide
-    end)
-    
-    if success then
-        local success2 = pcall(function()
-            o.CanCollide = not current
-        end)
-        return success2
-    end
-    
-    
-    if o:IsA("Model") then
-        local toggledAny = false
-        for _, child in o:GetChildren() do
-            local childSuccess, childCurrent = pcall(function()
+    if obj:IsA("Model") then
+        local has = false
+        local all_off = true
+        
+        for _, child in obj:GetChildren() do
+            local ok2, child_col = pcall(function()
                 return child.CanCollide
             end)
             
-            if childSuccess then
-                local successSet = pcall(function()
-                    child.CanCollide = not childCurrent
-                end)
-                if successSet then
-                    toggledAny = true
+            if ok2 and typeof(child_col) == "boolean" then
+                has = true
+                if child_col then
+                    all_off = false
                 end
             end
         end
-        return toggledAny
+        
+        if has then
+            return all_off and "OFF" or "MIXED"
+        end
+    end
+    
+    return "N/A"
+end
+
+local function toggle_col(obj)
+    if not obj then return false end
+    
+    local ok, cur = pcall(function()
+        return obj.CanCollide
+    end)
+    
+    if ok and typeof(cur) == "boolean" then
+        local ok2 = pcall(function()
+            obj.CanCollide = not cur
+        end)
+        return ok2
+    end
+    
+    if obj:IsA("Model") then
+        local any = false
+        
+        for _, child in obj:GetChildren() do
+            local ok2, child_cur = pcall(function()
+                return child.CanCollide
+            end)
+            
+            if ok2 and typeof(child_cur) == "boolean" then
+                local ok3 = pcall(function()
+                    child.CanCollide = not child_cur
+                end)
+                
+                if ok3 then
+                    any = true
+                end
+            end
+        end
+        
+        return any
     end
     
     return false
 end
 
-rs.Render:Connect(function()
-    local now = os.clock()
-    if now - last_key < 0.05 then return end
-    last_key = now
+local function scan()
+    local items = ws:GetDescendants()
+    local count = 0
     
+    for i = 1, cache_size do
+        cache[i] = nil
+    end
+    
+    for i = 1, #items do
+        local obj = items[i]
+        
+        if has_pos(obj) then
+            count = count + 1
+            cache[count] = obj
+        end
+    end
+    
+    cache_size = count
+    last_scan = os.clock()
+    
+    return count
+end
+
+local function check_keys()
+    local now = os.clock()
+    if now - last_key < debounce then
+        return false, false
+    end
+    
+    last_key = now
     local keys = getpressedkeys()
-    for _, k in keys do
-        if tostring(k):lower() == toggle then
-            on = not on
-        elseif tostring(k):lower() == collide and cur then
-            if toggle_col(cur) then
-                cur = nil
-                objs = scan()
+    local toggle_pressed = false
+    local collide_pressed = false
+    
+    for i = 1, #keys do
+        local key = tostring(keys[i]):lower()
+        if key == toggle then
+            toggle_pressed = true
+        elseif key == collide then
+            collide_pressed = true
+        end
+    end
+    
+    return toggle_pressed, collide_pressed
+end
+
+local function find_closest(mx, my, cam)
+    local closest = nil
+    local closest_screen = nil
+    local min_dist = radius * radius
+    
+    for i = 1, cache_size do
+        local obj = cache[i]
+        local pos = get_pos(obj)
+        
+        if pos then
+            local screen, vis = cam:WorldToScreenPoint(pos)
+            
+            if vis then
+                local dx = screen.X - mx
+                local dy = screen.Y - my
+                local dist = dx * dx + dy * dy
+                
+                if dist < min_dist then
+                    min_dist = dist
+                    closest = obj
+                    closest_screen = screen
+                end
             end
         end
     end
-end)
-
-rs.Render:Connect(function()
-    if not on then return end
     
-    local m = getmouseposition()
-    if not m then return end
-    local mx, my = m.X, m.Y
-    
-    local now = os.clock()
-    if now - last_scan > scan_int then
-        objs = scan()
-        last_scan = now
+    if closest then
+        cur_dist = math.sqrt(min_dist)
+    else
+        cur_dist = radius
     end
     
-    if #objs == 0 then return end
+    return closest, closest_screen
+end
+
+local function draw_info(obj, pos, screen, mx, my, cam)
+    if not obj or not pos or not screen then return end
+    
+    local name = obj.Name
+    local cls = obj.ClassName
+    local path = get_path(obj)
+    local col = get_col(obj)
+    
+    local pos_txt = string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
+    local txt = name .. " [" .. cls .. "]\n" ..
+                "Path: " .. path .. "\n" ..
+                "Pos: " .. pos_txt .. "\n" ..
+                "Collide: " .. col
+    
+    local bounds = f.GetTextBounds("Proggy", 13, txt)
+    local w = bounds.X + 20
+    local h = bounds.Y + 20
+    
+    local bx = mx + 25
+    local by = my + 25
+    
+    local view = cam.ViewportSize
+    if bx + w > view.X then
+        bx = mx - w - 25
+    end
+    if by + h > view.Y then
+        by = my - h - 25
+    end
+    
+    f.FilledRectangle(vector.create(bx, by), vector.create(w, h), bg, 1.0)
+    f.Rectangle(vector.create(bx, by), vector.create(w, h), border, 1.0, 1)
+    f.Text(vector.create(bx + 10, by + 10), 13, text, 1.0, txt, false, "Proggy")
+end
+
+scan()
+
+rs.Render:Connect(function()
+    frame = frame + 1
+    
+    local toggle_pressed, collide_pressed = check_keys()
+    
+    if toggle_pressed then
+        on = not on
+    end
+    
+    if not on then
+        local mouse = getmouseposition()
+        if mouse then
+            f.Text(
+                vector.create(mouse.X + 20, mouse.Y + 20),
+                12,
+                Color3.fromRGB(255, 50, 50),
+                1.0,
+                "OFF",
+                false,
+                "Proggy"
+            )
+        end
+        return
+    end
+    
+    local mouse = getmouseposition()
+    if not mouse then return end
+    local mx, my = mouse.X, mouse.Y
     
     local cam = ws.CurrentCamera
     if not cam then return end
     
-    cur = nil
-    cur_dist = radius
+    local now = os.clock()
+    if now - last_scan > scan_int then
+        scan()
+    end
     
-    for _, o in objs do
-        local p = pos(o)
-        if not p then continue end
-        
-        local sc, vis = cam:WorldToScreenPoint(p)
-        if not vis then continue end
-        
-        local dx = sc.X - mx
-        local dy = sc.Y - my
-        local d = math.sqrt(dx * dx + dy * dy)
-        
-        if d < cur_dist then
-            cur = o
-            cur_dist = d
+    local closest, screen = find_closest(mx, my, cam)
+    
+    if collide_pressed and closest then
+        if toggle_col(closest) then
+            scan()
+            closest = nil
         end
     end
     
-    f.FilledCircle(vector.create(mx, my), 4, pink, 1.0)
+    cur = closest
     
-    if cur and cur_dist < radius then
-        local p = pos(cur)
-        if p then
-            local sc, vis = cam:WorldToScreenPoint(p)
-            if vis then
-                f.Line(
-                    vector.create(mx, my),
-                    vector.create(sc.X, sc.Y),
-                    line,
-                    0.8, 1, 2
-                )
-            end
-            
-            local name = cur.Name
-            local cls = cur.ClassName
-            local pt = path(cur)
-            local col = col_state(cur)
-            local col_txt = "Collide: "
-            
-            if col == true then
-                col_txt = col_txt .. "ON"
-            elseif col == false then
-                col_txt = col_txt .. "OFF"
-            else
-                col_txt = col_txt .. "N/A"
-            end
-            
-            local txt = name .. " [" .. cls .. "]\n" ..
-                        "Path: " .. pt .. "\n" ..
-                        "Pos: " .. string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z) .. "\n" ..
-                        col_txt
-            
-            local sz = f.GetTextBounds("Proggy", 13, txt)
-            local w = sz.X + 20
-            local h = sz.Y + 20
-            
-            local bx = mx + 25
-            local by = my + 25
-            
-            local vs = cam.ViewportSize
-            if bx + w > vs.X then
-                bx = mx - w - 25
-            end
-            if by + h > vs.Y then
-                by = my - h - 25
-            end
-            
-            f.FilledRectangle(
-                vector.create(bx, by),
-                vector.create(w, h),
-                bg,
-                1.0
+    f.FilledCircle(vector.create(mx, my), 6, pink, 1.0)
+    f.FilledCircle(vector.create(mx, my), 3, Color3.fromRGB(255, 255, 255), 1.0)
+    
+    if closest and screen then
+        local pos = get_pos(closest)
+        
+        if pos then
+            f.Line(
+                vector.create(mx, my),
+                vector.create(screen.X, screen.Y),
+                line,
+                0.8, 1, 2
             )
             
-            f.Rectangle(
-                vector.create(bx, by),
-                vector.create(w, h),
-                border,
-                1.0, 1
+            f.Circle(
+                vector.create(screen.X, screen.Y),
+                10,
+                line,
+                0.6, 2
             )
             
-            f.Text(
-                vector.create(bx + 10, by + 10),
-                13,
-                text,
-                1.0,
-                txt,
-                false,
-                "Proggy"
-            )
+            draw_info(closest, pos, screen, mx, my, cam)
         end
     end
 end)
