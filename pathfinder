@@ -1,0 +1,226 @@
+--!strict
+--!optimize 2
+
+local radius = 50
+local scan_int = 2.0
+local pink = Color3.fromRGB(255, 105, 180)
+local line = Color3.fromRGB(255, 100, 150)
+local bg = Color3.fromRGB(25, 25, 30)
+local border = Color3.fromRGB(80, 80, 90)
+local text = Color3.fromRGB(255, 255, 255)
+
+local ws = game:GetService("Workspace")
+local rs = game:GetService("RunService")
+local f = DrawingImmediate
+
+local objs = {}
+local last_scan = 0
+local on = true
+local cur = nil
+local cur_dist = radius
+local last_key = 0
+
+local function scan()
+    local new = {}
+    local function scan_child(p)
+        for _, c in p:GetChildren() do
+            if c:IsA("BasePart") or c:IsA("MeshPart") then
+                if c.ClassName ~= "Terrain" then
+                    table.insert(new, c)
+                end
+            elseif c:IsA("Model") then
+                local prim = c.PrimaryPart
+                if prim then
+                    table.insert(new, c)
+                end
+            end
+            scan_child(c)
+        end
+    end
+    scan_child(ws)
+    return new
+end
+
+local function path(o)
+    if not o then return "" end
+    local parts = {}
+    local cur = o
+    while cur and cur ~= game do
+        table.insert(parts, 1, cur.Name)
+        cur = cur.Parent
+    end
+    return table.concat(parts, " > ")
+end
+
+local function pos(o)
+    if o:IsA("BasePart") or o:IsA("MeshPart") then
+        return o.Position
+    elseif o:IsA("Model") then
+        local prim = o.PrimaryPart
+        if prim then
+            return prim.Position
+        end
+    end
+    return nil
+end
+
+local function col_state(o)
+    if o:IsA("BasePart") or o:IsA("MeshPart") then
+        return o.CanCollide
+    elseif o:IsA("Model") then
+        local prim = o.PrimaryPart
+        if prim then
+            return prim.CanCollide
+        end
+    end
+    return nil
+end
+
+local function toggle_col(o)
+    if not o then return false end
+    
+    if o:IsA("BasePart") or o:IsA("MeshPart") then
+        o.CanCollide = not o.CanCollide
+        return true
+    elseif o:IsA("Model") then
+        for _, p in o:GetChildren() do
+            if p:IsA("BasePart") or p:IsA("MeshPart") then
+                p.CanCollide = not p.CanCollide
+            end
+        end
+        return true
+    end
+    return false
+end
+
+rs.Render:Connect(function()
+    local now = os.clock()
+    if now - last_key < 0.05 then return end
+    last_key = now
+    
+    local keys = getpressedkeys()
+    for _, k in keys do
+        if k:lower() == toggle then
+            on = not on
+        elseif k:lower() == collide and cur then
+            if toggle_col(cur) then
+                cur = nil
+                objs = scan()
+            end
+        end
+    end
+end)
+
+rs.Render:Connect(function()
+    if not on then return end
+    
+    local m = getmouseposition()
+    if not m then return end
+    local mx, my = m.X, m.Y
+    
+    local now = os.clock()
+    if now - last_scan > scan_int then
+        objs = scan()
+        last_scan = now
+    end
+    
+    if #objs == 0 then return end
+    
+    local cam = ws.CurrentCamera
+    if not cam then return end
+    
+    cur = nil
+    cur_dist = radius
+    
+    for _, o in objs do
+        local p = pos(o)
+        if not p then continue end
+        
+        local sc, vis = cam:WorldToScreenPoint(p)
+        if not vis then continue end
+        
+        local dx = sc.X - mx
+        local dy = sc.Y - my
+        local d = math.sqrt(dx * dx + dy * dy)
+        
+        if d < cur_dist then
+            cur = o
+            cur_dist = d
+        end
+    end
+    
+    f.FilledCircle(vector.create(mx, my), 4, pink, 1.0)
+    
+    if cur and cur_dist < radius then
+        local p = pos(cur)
+        if p then
+            local sc, vis = cam:WorldToScreenPoint(p)
+            if vis then
+                f.Line(
+                    vector.create(mx, my),
+                    vector.create(sc.X, sc.Y),
+                    line,
+                    0.8, 1, 2
+                )
+            end
+            
+            local name = cur.Name
+            local cls = cur.ClassName
+            local pt = path(cur)
+            local col = col_state(cur)
+            local col_txt = "Collide: "
+            
+            if col == true then
+                col_txt = col_txt .. "ON"
+            elseif col == false then
+                col_txt = col_txt .. "OFF"
+            else
+                col_txt = col_txt .. "N/A"
+            end
+            
+            local txt = name .. " [" .. cls .. "]\n" ..
+                        "Path: " .. pt .. "\n" ..
+                        "Pos: " .. string.format("%.1f, %.1f, %.1f", p.X, p.Y, p.Z) .. "\n" ..
+                        col_txt
+            
+            local sz = f.GetTextBounds("Proggy", 13, txt)
+            local w = sz.X + 20
+            local h = sz.Y + 20
+            
+            local bx = mx + 25
+            local by = my + 25
+            
+            local vs = cam.ViewportSize
+            if bx + w > vs.X then
+                bx = mx - w - 25
+            end
+            if by + h > vs.Y then
+                by = my - h - 25
+            end
+            
+            f.FilledRectangle(
+                vector.create(bx, by),
+                vector.create(w, h),
+                bg,
+                1.0
+            )
+            
+            f.Rectangle(
+                vector.create(bx, by),
+                vector.create(w, h),
+                border,
+                1.0, 1
+            )
+            
+            f.Text(
+                vector.create(bx + 10, by + 10),
+                13,
+                text,
+                1.0,
+                txt,
+                false,
+                "Proggy"
+            )
+        end
+    end
+end)
