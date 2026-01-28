@@ -20,20 +20,48 @@ local cur = nil
 local cur_dist = radius
 local last_key = 0
 
+
+local function get_object_position(obj)
+    if not obj then return nil end
+    
+
+    local success1, pos1 = pcall(function()
+        return obj.Position
+    end)
+    
+    if success1 and pos1 then
+        return pos1
+    end
+    
+
+    local success2, cframe = pcall(function()
+        return obj.CFrame
+    end)
+    
+    if success2 and cframe and cframe.Position then
+        return cframe.Position
+    end
+    
+    return nil
+end
+
 local function scan()
     local new = {}
     local function scan_child(p)
         for _, c in p:GetChildren() do
-            if c:IsA("BasePart") or c:IsA("MeshPart") then
-                if c.ClassName ~= "Terrain" then
-                    table.insert(new, c)
-                end
-            elseif c:IsA("Model") then
-                local prim = c.PrimaryPart
-                if prim then
-                    table.insert(new, c)
-                end
+
+            local hasPosition = false
+            local success1, pos1 = pcall(function()
+                return c.Position
+            end)
+            local success2, cframe = pcall(function()
+                return c.CFrame
+            end)
+            
+            if (success1 and pos1) or (success2 and cframe and cframe.Position) then
+                table.insert(new, c)
             end
+            
             scan_child(c)
         end
     end
@@ -53,43 +81,59 @@ local function path(o)
 end
 
 local function pos(o)
-    if o:IsA("BasePart") or o:IsA("MeshPart") then
-        return o.Position
-    elseif o:IsA("Model") then
-        local prim = o.PrimaryPart
-        if prim then
-            return prim.Position
-        end
-    end
-    return nil
+    return get_object_position(o)
 end
 
 local function col_state(o)
-    if o:IsA("BasePart") or o:IsA("MeshPart") then
+    if not o then return nil end
+    
+
+    local success, canCollide = pcall(function()
         return o.CanCollide
-    elseif o:IsA("Model") then
-        local prim = o.PrimaryPart
-        if prim then
-            return prim.CanCollide
-        end
+    end)
+    
+    if success then
+        return canCollide
     end
+    
     return nil
 end
 
 local function toggle_col(o)
     if not o then return false end
     
-    if o:IsA("BasePart") or o:IsA("MeshPart") then
-        o.CanCollide = not o.CanCollide
-        return true
-    elseif o:IsA("Model") then
-        for _, p in o:GetChildren() do
-            if p:IsA("BasePart") or p:IsA("MeshPart") then
-                p.CanCollide = not p.CanCollide
+
+    local success, current = pcall(function()
+        return o.CanCollide
+    end)
+    
+    if success then
+        local success2 = pcall(function()
+            o.CanCollide = not current
+        end)
+        return success2
+    end
+    
+    
+    if o:IsA("Model") then
+        local toggledAny = false
+        for _, child in o:GetChildren() do
+            local childSuccess, childCurrent = pcall(function()
+                return child.CanCollide
+            end)
+            
+            if childSuccess then
+                local successSet = pcall(function()
+                    child.CanCollide = not childCurrent
+                end)
+                if successSet then
+                    toggledAny = true
+                end
             end
         end
-        return true
+        return toggledAny
     end
+    
     return false
 end
 
@@ -100,9 +144,9 @@ rs.Render:Connect(function()
     
     local keys = getpressedkeys()
     for _, k in keys do
-        if k:lower() == toggle then
+        if tostring(k):lower() == toggle then
             on = not on
-        elseif k:lower() == collide and cur then
+        elseif tostring(k):lower() == collide and cur then
             if toggle_col(cur) then
                 cur = nil
                 objs = scan()
