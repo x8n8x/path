@@ -19,11 +19,8 @@ local cache = {}
 local cache_size = 0
 local last_scan = 0
 local on = true
-local cur = nil
-local cur_dist = radius
 local last_toggle = 0
 local last_collide = 0
-local frame = 0
 local cam = nil
 local cam_view = nil
 local pending = nil
@@ -33,14 +30,10 @@ local function get_pos(obj)
     if not obj then return nil end
 
     local ok, pos = pcall(function() return obj.Position end)
-    if ok and typeof(pos) == "vector" then
-        return pos
-    end
+    if ok and typeof(pos) == "vector" then return pos end
 
     local ok2, cf = pcall(function() return obj.CFrame end)
-    if ok2 and cf and cf.Position then
-        return cf.Position
-    end
+    if ok2 and cf and cf.Position then return cf.Position end
 
     return nil
 end
@@ -52,7 +45,8 @@ local function get_path(obj)
     local cur = obj
 
     while cur and cur ~= game do
-        table.insert(parts, 1, cur.Name)
+        local ok, name = pcall(function() return cur.Name end)
+        parts[#parts + 1] = ok and tostring(name) or "?"
         cur = cur.Parent
     end
 
@@ -79,9 +73,7 @@ local function get_col(obj)
             end
         end
 
-        if has then
-            return all_off and "OFF" or "MIXED"
-        end
+        if has then return all_off and "OFF" or "MIXED" end
     end
 
     return "N/A"
@@ -92,7 +84,8 @@ local function toggle_col(obj)
 
     local ok, cur_col = pcall(function() return obj.CanCollide end)
     if ok and typeof(cur_col) == "boolean" then
-        return pcall(function() obj.CanCollide = not cur_col end)
+        local ok2 = pcall(function() obj.CanCollide = not cur_col end)
+        return ok2
     end
 
     if obj:IsA("Model") then
@@ -192,8 +185,6 @@ local function find_closest(mx, my)
         end
     end
 
-    cur_dist = closest and math.sqrt(min_dist) or radius
-
     return closest, closest_screen
 end
 
@@ -229,7 +220,6 @@ task.spawn(function()
         local ok, c = pcall(function() return ws.CurrentCamera end)
         if ok and c then
             cam = c
-
             local ok2, v = pcall(function() return c.ViewportSize end)
             if ok2 then cam_view = v end
         end
@@ -254,8 +244,6 @@ end)
 scan()
 
 rs.Render:Connect(function()
-    frame = frame + 1
-
     local toggle_pressed, collide_pressed = check_keys()
     if toggle_pressed then on = not on end
     if not on then return end
@@ -271,8 +259,6 @@ rs.Render:Connect(function()
     if collide_pressed and closest then
         pending = closest.obj
     end
-
-    cur = closest
 
     f.FilledCircle(vector.create(mx, my), 6, pink, 1.0)
     f.FilledCircle(vector.create(mx, my), 3, Color3.fromRGB(255, 255, 255), 1.0)
