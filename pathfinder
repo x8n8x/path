@@ -14,6 +14,7 @@ local text = Color3.fromRGB(255, 255, 255)
 local ws = game:GetService("Workspace")
 local rs = game:GetService("RunService")
 local f = DrawingImmediate
+local cam = nil
 
 local cache = {}
 local cache_size = 0
@@ -259,6 +260,18 @@ end
 
 scan()
 
+task.spawn(function()
+    while true do
+        local ok, c = pcall(function()
+            return ws.CurrentCamera
+        end)
+        if ok and c then
+            cam = c
+        end
+        task.wait(0.1)
+    end
+end)
+
 rs.Render:Connect(function()
     frame = frame + 1
     
@@ -274,7 +287,6 @@ rs.Render:Connect(function()
     if not mouse then return end
     local mx, my = mouse.X, mouse.Y
     
-    local cam = ws.CurrentCamera
     if not cam then return end
     
     local now = os.clock()
