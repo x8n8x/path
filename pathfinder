@@ -21,6 +21,7 @@ local last_scan = 0
 local on = true
 local last_toggle = 0
 local last_collide = 0
+local last_copy = 0
 local cam = nil
 local cam_view = nil
 local pending = nil
@@ -113,10 +114,10 @@ local function build(obj)
     return {
         obj = obj,
         pos = pos,
-        name = obj.Name,
-        cls = obj.ClassName,
-        path = get_path(obj),
-        col = get_col(obj),
+        name = tostring(obj.Name),
+        cls = tostring(obj.ClassName),
+        path = tostring(get_path(obj)),
+        col = tostring(get_col(obj)),
     }
 end
 
@@ -147,6 +148,7 @@ local function check_keys()
     local keys = getpressedkeys()
     local toggle_pressed = false
     local collide_pressed = false
+    local copy_pressed = false
 
     for i = 1, #keys do
         local key = tostring(keys[i]):lower()
@@ -157,10 +159,13 @@ local function check_keys()
         elseif key == collide and now - last_collide > key_delay then
             collide_pressed = true
             last_collide = now
+        elseif key == copy and now - last_copy > key_delay then
+            copy_pressed = true
+            last_copy = now
         end
     end
 
-    return toggle_pressed, collide_pressed
+    return toggle_pressed, collide_pressed, copy_pressed
 end
 
 local function find_closest(mx, my)
@@ -193,10 +198,10 @@ local function draw_info(entry, screen, mx, my)
 
     local pos = entry.pos
     local pos_txt = string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
-    local txt = entry.name .. " [" .. entry.cls .. "]\n" ..
-                "Path: " .. entry.path .. "\n" ..
+    local txt = tostring(entry.name) .. " [" .. tostring(entry.cls) .. "]\n" ..
+                "Path: " .. tostring(entry.path) .. "\n" ..
                 "Pos: " .. pos_txt .. "\n" ..
-                "Collide: " .. entry.col
+                "Collide: " .. tostring(entry.col)
 
     local bounds = f.GetTextBounds("Proggy", 13, txt)
     local w = bounds.X + 20
@@ -244,7 +249,7 @@ end)
 scan()
 
 rs.Render:Connect(function()
-    local toggle_pressed, collide_pressed = check_keys()
+    local toggle_pressed, collide_pressed, copy_pressed = check_keys()
     if toggle_pressed then on = not on end
     if not on then return end
 
@@ -258,6 +263,13 @@ rs.Render:Connect(function()
 
     if collide_pressed and closest then
         pending = closest.obj
+    end
+
+    if copy_pressed and closest then
+        local pos = closest.pos
+        local payload = tostring(closest.path) .. "\n" ..
+                        string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
+        setclipboard(payload)
     end
 
     f.FilledCircle(vector.create(mx, my), 6, pink, 1.0)
