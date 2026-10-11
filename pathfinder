@@ -14,7 +14,6 @@ local text = Color3.fromRGB(255, 255, 255)
 local ws = game:GetService("Workspace")
 local rs = game:GetService("RunService")
 local f = DrawingImmediate
-local cam = nil
 
 local cache = {}
 local cache_size = 0
@@ -25,146 +24,128 @@ local cur_dist = radius
 local last_toggle = 0
 local last_collide = 0
 local frame = 0
-
-local function has_pos(obj)
-    if not obj then return false end
-    local ok = pcall(function()
-        return typeof(obj.Position) == "vector"
-    end)
-    return ok
-end
+local cam = nil
+local cam_view = nil
+local pending = nil
+local dirty = false
 
 local function get_pos(obj)
     if not obj then return nil end
-    
-    local ok, pos = pcall(function()
-        return obj.Position
-    end)
-    
+
+    local ok, pos = pcall(function() return obj.Position end)
     if ok and typeof(pos) == "vector" then
         return pos
     end
-    
-    local ok2, cf = pcall(function()
-        return obj.CFrame
-    end)
-    
+
+    local ok2, cf = pcall(function() return obj.CFrame end)
     if ok2 and cf and cf.Position then
         return cf.Position
     end
-    
+
     return nil
 end
 
 local function get_path(obj)
     if not obj then return "" end
-    
+
     local parts = {}
     local cur = obj
-    
+
     while cur and cur ~= game do
         table.insert(parts, 1, cur.Name)
         cur = cur.Parent
     end
-    
+
     return table.concat(parts, " > ")
 end
 
 local function get_col(obj)
     if not obj then return "N/A" end
-    
-    local ok, col = pcall(function()
-        return obj.CanCollide
-    end)
-    
+
+    local ok, col = pcall(function() return obj.CanCollide end)
     if ok and typeof(col) == "boolean" then
         return col and "ON" or "OFF"
     end
-    
+
     if obj:IsA("Model") then
         local has = false
         local all_off = true
-        
+
         for _, child in obj:GetChildren() do
-            local ok2, child_col = pcall(function()
-                return child.CanCollide
-            end)
-            
+            local ok2, child_col = pcall(function() return child.CanCollide end)
             if ok2 and typeof(child_col) == "boolean" then
                 has = true
-                if child_col then
-                    all_off = false
-                end
+                if child_col then all_off = false end
             end
         end
-        
+
         if has then
             return all_off and "OFF" or "MIXED"
         end
     end
-    
+
     return "N/A"
 end
 
 local function toggle_col(obj)
     if not obj then return false end
-    
-    local ok, cur_col = pcall(function()
-        return obj.CanCollide
-    end)
-    
+
+    local ok, cur_col = pcall(function() return obj.CanCollide end)
     if ok and typeof(cur_col) == "boolean" then
-        local ok2 = pcall(function()
-            obj.CanCollide = not cur_col
-        end)
-        return ok2
+        return pcall(function() obj.CanCollide = not cur_col end)
     end
-    
+
     if obj:IsA("Model") then
         local any = false
-        
+
         for _, child in obj:GetChildren() do
-            local ok2, child_col = pcall(function()
-                return child.CanCollide
-            end)
-            
+            local ok2, child_col = pcall(function() return child.CanCollide end)
             if ok2 and typeof(child_col) == "boolean" then
-                local ok3 = pcall(function()
-                    child.CanCollide = not child_col
-                end)
-                
-                if ok3 then
+                if pcall(function() child.CanCollide = not child_col end) then
                     any = true
                 end
             end
         end
-        
+
         return any
     end
-    
+
     return false
+end
+
+local function build(obj)
+    local pos = get_pos(obj)
+    if not pos then return nil end
+
+    return {
+        obj = obj,
+        pos = pos,
+        name = obj.Name,
+        cls = obj.ClassName,
+        path = get_path(obj),
+        col = get_col(obj),
+    }
 end
 
 local function scan()
     local items = ws:GetDescendants()
     local count = 0
-    
+
     for i = 1, cache_size do
         cache[i] = nil
     end
-    
+
     for i = 1, #items do
-        local obj = items[i]
-        
-        if has_pos(obj) then
+        local entry = build(items[i])
+        if entry then
             count = count + 1
-            cache[count] = obj
+            cache[count] = entry
         end
     end
-    
+
     cache_size = count
     last_scan = os.clock()
-    
+
     return count
 end
 
@@ -173,10 +154,10 @@ local function check_keys()
     local keys = getpressedkeys()
     local toggle_pressed = false
     local collide_pressed = false
-    
+
     for i = 1, #keys do
         local key = tostring(keys[i]):lower()
-        
+
         if key == toggle and now - last_toggle > key_delay then
             toggle_pressed = true
             last_toggle = now
@@ -185,148 +166,132 @@ local function check_keys()
             last_collide = now
         end
     end
-    
+
     return toggle_pressed, collide_pressed
 end
 
-local function find_closest(mx, my, cam)
+local function find_closest(mx, my)
     local closest = nil
     local closest_screen = nil
     local min_dist = radius * radius
-    
+
     for i = 1, cache_size do
-        local obj = cache[i]
-        local pos = get_pos(obj)
-        
-        if pos then
-            local screen, vis = cam:WorldToScreenPoint(pos)
-            
-            if vis then
-                local dx = screen.X - mx
-                local dy = screen.Y - my
-                local dist = dx * dx + dy * dy
-                
-                if dist < min_dist then
-                    min_dist = dist
-                    closest = obj
-                    closest_screen = screen
-                end
+        local entry = cache[i]
+        local screen, vis = cam:WorldToScreenPoint(entry.pos)
+
+        if vis then
+            local dx = screen.X - mx
+            local dy = screen.Y - my
+            local dist = dx * dx + dy * dy
+
+            if dist < min_dist then
+                min_dist = dist
+                closest = entry
+                closest_screen = screen
             end
         end
     end
-    
-    if closest then
-        cur_dist = math.sqrt(min_dist)
-    else
-        cur_dist = radius
-    end
-    
+
+    cur_dist = closest and math.sqrt(min_dist) or radius
+
     return closest, closest_screen
 end
 
-local function draw_info(obj, pos, screen, mx, my, cam)
-    if not obj or not pos or not screen then return end
-    
-    local name = obj.Name
-    local cls = obj.ClassName
-    local path = get_path(obj)
-    local col = get_col(obj)
-    
+local function draw_info(entry, screen, mx, my)
+    if not entry or not screen then return end
+
+    local pos = entry.pos
     local pos_txt = string.format("%.1f, %.1f, %.1f", pos.X, pos.Y, pos.Z)
-    local txt = name .. " [" .. cls .. "]\n" ..
-                "Path: " .. path .. "\n" ..
+    local txt = entry.name .. " [" .. entry.cls .. "]\n" ..
+                "Path: " .. entry.path .. "\n" ..
                 "Pos: " .. pos_txt .. "\n" ..
-                "Collide: " .. col
-    
+                "Collide: " .. entry.col
+
     local bounds = f.GetTextBounds("Proggy", 13, txt)
     local w = bounds.X + 20
     local h = bounds.Y + 20
-    
+
     local bx = mx + 25
     local by = my + 25
-    
-    local view = cam.ViewportSize
-    if bx + w > view.X then
-        bx = mx - w - 25
+
+    if cam_view then
+        if bx + w > cam_view.X then bx = mx - w - 25 end
+        if by + h > cam_view.Y then by = my - h - 25 end
     end
-    if by + h > view.Y then
-        by = my - h - 25
-    end
-    
+
     f.FilledRectangle(vector.create(bx, by), vector.create(w, h), bg, 1.0)
     f.Rectangle(vector.create(bx, by), vector.create(w, h), border, 1.0, 1)
     f.Text(vector.create(bx + 10, by + 10), 13, text, 1.0, txt, false, "Proggy")
 end
 
-scan()
-
 task.spawn(function()
     while true do
-        local ok, c = pcall(function()
-            return ws.CurrentCamera
-        end)
+        local ok, c = pcall(function() return ws.CurrentCamera end)
         if ok and c then
             cam = c
+
+            local ok2, v = pcall(function() return c.ViewportSize end)
+            if ok2 then cam_view = v end
         end
         task.wait(0.1)
     end
 end)
 
+rs.PostModel:Connect(function()
+    if pending then
+        toggle_col(pending)
+        pending = nil
+        dirty = true
+    end
+
+    local now = os.clock()
+    if dirty or now - last_scan > scan_int then
+        scan()
+        dirty = false
+    end
+end)
+
+scan()
+
 rs.Render:Connect(function()
     frame = frame + 1
-    
+
     local toggle_pressed, collide_pressed = check_keys()
-    
-    if toggle_pressed then
-        on = not on
-    end
-    
+    if toggle_pressed then on = not on end
     if not on then return end
-    
+
     local mouse = getmouseposition()
     if not mouse then return end
     local mx, my = mouse.X, mouse.Y
-    
+
     if not cam then return end
-    
-    local now = os.clock()
-    if now - last_scan > scan_int then
-        scan()
-    end
-    
-    local closest, screen = find_closest(mx, my, cam)
-    
+
+    local closest, screen = find_closest(mx, my)
+
     if collide_pressed and closest then
-        if toggle_col(closest) then
-            scan()
-            closest = nil
-        end
+        pending = closest.obj
     end
-    
+
     cur = closest
-    
+
     f.FilledCircle(vector.create(mx, my), 6, pink, 1.0)
     f.FilledCircle(vector.create(mx, my), 3, Color3.fromRGB(255, 255, 255), 1.0)
-    
+
     if closest and screen then
-        local pos = get_pos(closest)
-        
-        if pos then
-            f.Line(
-                vector.create(mx, my),
-                vector.create(screen.X, screen.Y),
-                line,
-                0.8, 1, 2
-            )
-            
-            f.Circle(
-                vector.create(screen.X, screen.Y),
-                10,
-                line,
-                0.6, 2
-            )
-            
-            draw_info(closest, pos, screen, mx, my, cam)
-        end
+        f.Line(
+            vector.create(mx, my),
+            vector.create(screen.X, screen.Y),
+            line,
+            0.8, 1, 2
+        )
+
+        f.Circle(
+            vector.create(screen.X, screen.Y),
+            10,
+            line,
+            0.6, 2
+        )
+
+        draw_info(closest, screen, mx, my)
     end
 end)
